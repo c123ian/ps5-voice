@@ -1,0 +1,8 @@
+{
+  "model": "any",
+  "messages": [
+    {"role": "system", "content": "You are a voice assistant. Reply in one short sentence."},
+    {"role": "user", "content": "hey"}
+  ],
+  "chat_template_kwargs": {"enable_thinking": false}
+}

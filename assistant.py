@@ -1,24 +1,40 @@
-import sounddevice as sd, numpy as np, httpx, threading
+import sounddevice as sd, numpy as np, httpx, threading, time
 from faster_whisper import WhisperModel
 from piper import PiperVoice, SynthesisConfig
+from openwakeword.model import Model
 
 sr = 16000
 url = "http://192.168.0.97:8081/v1/chat/completions"
-sys_msg = {"role":"system","content":"You are a voice assistant. Reply in one short sentence."}
+sys_msg = {"role":"system","content":"You are a voice assistant. Reply in one short sentence, written to be spoken aloud: conversational, with natural punctuation. An occasional 'hmm' or 'well,' is fine. No lists, markdown, or emoji."}
 
-print("loading whisper...")
+print("loading models...")
 stt = WhisperModel("base", device="cpu", compute_type="int8")
 voice = PiperVoice.load("en_GB-vctk-medium.onnx")
 syn = SynthesisConfig(speaker_id=0)
+ww = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
 
-def record():
+def record(chunk=1024, silence_sec=0.8, thresh=0.015, start_thresh=0.03, max_sec=30):
+    "Record until ~silence_sec of quiet after speech, or max_sec."
     frames = []
-    stop = threading.Event()
-    def cb(indata, *a): frames.append(indata.copy())
-    with sd.InputStream(samplerate=sr, channels=1, dtype='float32', callback=cb):
-        input("  recording... Enter to stop")
-        stop.set()
+    state = dict(started=False, silent=0.0, stop=False)
+    def cb(indata, *a):
+        frames.append(indata.copy())
+        level = float(np.abs(indata).max())
+        if level > start_thresh: state['started'] = True
+        if state['started']: state['silent'] = state['silent'] + chunk/sr if level < thresh else 0.0
+        if state['silent'] >= silence_sec: state['stop'] = True
+    with sd.InputStream(samplerate=sr, channels=1, dtype='float32', blocksize=chunk, callback=cb):
+        t0 = time.time()
+        while not state['stop'] and time.time() - t0 < max_sec: time.sleep(0.05)
     return np.concatenate(frames)[:,0] if frames else np.zeros(1, dtype='float32')
+
+def listen_for_wake(thresh=0.5, chunk=1280):
+    "Listen passively until the wake word is heard."
+    with sd.InputStream(samplerate=sr, channels=1, dtype='int16', blocksize=chunk) as stream:
+        while True:
+            data,_ = stream.read(chunk)
+            pred = ww.predict(data[:,0])
+            if pred.get("hey_jarvis", 0) > thresh: return
 
 def transcribe(a):
     segs,_ = stt.transcribe(a, language="en")
@@ -37,8 +53,10 @@ def say(text):
     sd.play(np.concatenate(chunks), voice.config.sample_rate); sd.wait()
 
 hist = []
+print("Listening for 'hey jarvis'... (Ctrl+C to quit)")
 while True:
-    if input("\nEnter to talk (q to quit): ").strip().lower() == "q": break
+    listen_for_wake()
+    print("  wake word! speak now...")
     a = record()
     text = transcribe(a)
     print(f"  you: {text}")

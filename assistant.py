@@ -1,5 +1,6 @@
-import sounddevice as sd, numpy as np, httpx, pyttsx3, threading
+import sounddevice as sd, numpy as np, httpx, threading
 from faster_whisper import WhisperModel
+from piper import PiperVoice, SynthesisConfig
 
 sr = 16000
 url = "http://192.168.0.97:8081/v1/chat/completions"
@@ -7,6 +8,8 @@ sys_msg = {"role":"system","content":"You are a voice assistant. Reply in one sh
 
 print("loading whisper...")
 stt = WhisperModel("base", device="cpu", compute_type="int8")
+voice = PiperVoice.load("en_GB-vctk-medium.onnx")
+syn = SynthesisConfig(speaker_id=0)
 
 def record():
     frames = []
@@ -30,9 +33,8 @@ def ask(text, hist):
     return reply
 
 def say(text):
-    e = pyttsx3.init()
-    e.say(text); e.runAndWait()
-    e.stop()
+    chunks = [np.frombuffer(c.audio_int16_bytes, dtype=np.int16) for c in voice.synthesize(text, syn_config=syn)]
+    sd.play(np.concatenate(chunks), voice.config.sample_rate); sd.wait()
 
 hist = []
 while True:
